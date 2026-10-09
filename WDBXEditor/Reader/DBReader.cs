@@ -106,10 +106,24 @@ namespace WDBXEditor.Reader
 					throw new Exception("File contains no records.");
 
 				DBEntry entry = new DBEntry(header, dbFile);
+                if (header is WDBC raw && entry.TableStructure == null &&
+                    Database.BuildNumber == (int)ExpansionFinalBuild.WotLK)
+                    PrepareRawWdbc(entry, raw, dbFile, dbReader.BaseStream.Length);
 				if (header.CheckTableStructure && entry.TableStructure == null)
 					throw new Exception("Definition missing.");
 
-				if (header is WDC1 wdc1)
+				if (header is WDBC rawHeader && rawHeader.IsRawLayout)
+                {
+                    long stringStart = pos + (long)header.RecordCount * header.RecordSize;
+                    dbReader.BaseStream.Position = stringStart;
+                    rawHeader.OriginalStringBlock = dbReader.ReadBytes((int)header.StringBlockSize);
+                    dbReader.BaseStream.Position = pos;
+                    ReadIntoTable(ref entry, dbReader, new Dictionary<int, string>());
+                    ErrorMessage = "Raw WDBC layout: values are opaque 32-bit words; strings and floats are not decoded.";
+                    stream.Dispose();
+                    return entry;
+                }
+                else if (header is WDC1 wdc1)
 				{
 					Dictionary<int, string> StringTable = wdc1.ReadStringTable(dbReader);
 					wdc1.LoadDefinitionSizes(entry);
@@ -308,14 +322,78 @@ namespace WDBXEditor.Reader
 		}
 		#endregion
 
-		#region Write Methods
+        // Raw WDBC is a fallback for otherwise unknown Ascension tables, not a schema guess.
+        // Always preserve the original string block bytes to keep unknown offsets valid.
+        private static void PrepareRawWdbc(DBEntry entry, WDBC header, string filename, long fileLength)
+        {
+            if (header.RecordCount > int.MaxValue || header.RecordSize == 0 ||
+                header.RecordSize > 65536 || header.StringBlockSize > int.MaxValue ||
+                20L + (long)header.RecordCount * header.RecordSize + header.StringBlockSize != fileLength)
+                throw new InvalidDataException("Unknown WDBC: invalid or unsupported record layout. Raw editing refused.");
+
+            // The header's FieldCount is not trustworthy for all custom Ascension DBCs.
+            int words = (int)(header.RecordSize / 4);
+            int trailingBytes = (int)(header.RecordSize % 4);
+            var fields = new List<Field>(words + trailingBytes + 1)
+            {
+                new Field { Name = "_Row", Type = "int", IsIndex = true, AutoGenerate = true }
+            };
+            for (int i = 0; i < words; i++)
+                fields.Add(new Field { Name = "Field_" + i.ToString("D3"), Type = "uint" });
+            for (int i = 0; i < trailingBytes; i++)
+                fields.Add(new Field { Name = "TailByte_" + i.ToString("D2"), Type = "byte" });
+
+            var table = new Table
+            {
+                Name = Path.GetFileNameWithoutExtension(filename),
+                Build = (int)ExpansionFinalBuild.WotLK,
+                Fields = fields
+            };
+            table.Load();
+            header.TableStructure = table;
+            header.IsRawLayout = true;
+            entry.LoadDefinition();
+        }
+
+        private static void WriteRawWdbc(DBEntry entry, BinaryWriter writer, WDBC header)
+        {
+            int words = (int)(header.RecordSize / 4);
+            int expectedColumns = 1 + words + (int)(header.RecordSize % 4);
+            if (entry.Data.Columns.Count != expectedColumns)
+                throw new InvalidDataException("Raw WDBC column count changed; refusing to write.");
+
+            writer.Write(Encoding.ASCII.GetBytes("WDBC"));
+            writer.Write((uint)entry.Data.Rows.Count);
+            writer.Write(header.FieldCount);
+            writer.Write(header.RecordSize);
+            writer.Write((uint)header.OriginalStringBlock.Length);
+            foreach (DataRow row in entry.Data.Rows)
+            {
+                for (int column = 1; column <= words; column++)
+                    writer.Write(row.Field<uint>(column));
+                for (int column = words + 1; column < expectedColumns; column++)
+                    writer.Write(row.Field<byte>(column));
+            }
+            writer.Write(header.OriginalStringBlock);
+        }
+
+        #region Write Methods
 		public void Write(DBEntry entry, string savepath)
 		{
 			using (var fs = new FileStream(savepath, FileMode.Create))
 			using (var ms = new MemoryStream())
 			using (var bw = new BinaryWriter(ms))
 			{
-				StringTable st = new StringTable(entry.Header.ExtendedStringTable); //Preloads null byte(s)
+				if (entry.Header is WDBC rawHeader && rawHeader.IsRawLayout)
+                {
+                    WriteRawWdbc(entry, bw, rawHeader);
+                    ms.Position = 0;
+                    ms.CopyTo(fs);
+                    entry.ResetTemp();
+                    return;
+                }
+
+                StringTable st = new StringTable(entry.Header.ExtendedStringTable); //Preloads null byte(s)
 				entry.Header.WriteHeader(bw, entry);
 
 				if (!entry.Header.IsTypeOf<WDC1>())
