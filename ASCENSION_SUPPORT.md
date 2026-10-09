@@ -8,7 +8,7 @@ This branch adds an **opt-in-by-missing-definition raw WDBC fallback** to WDBXEd
 2. Select **WotLK 3.3.5 (12340)**.
 3. If there is no existing named definition, compatible `WDBC` files open using `_Row`, `Field_000`, `Field_001` etc., and up to three `TailByte_*` columns.
 
-The virtual `_Row` ID is not stored on disk; repeated first-field values are allowed. The raw columns are **opaque integers/bytes** and do not imply signed IDs, floats, string offsets, arrays, or known field semantics. Verified string columns in `ManastormMessages` and `SpellTagTypes` have **read-only decoded previews**. Their original numeric offsets remain editable, but string editing itself is not implemented yet. The original string block is kept byte-for-byte when saving, rather than being reconstructed from guessed offsets.
+The virtual `_Row` ID is not stored on disk; repeated first-field values are allowed. The raw columns are **opaque integers/bytes** and do not imply signed IDs, floats, string offsets, arrays, or known field semantics. Verified string columns in `ManastormMessages` (`IconToken`, `Title_enUS`, `Text_enUS`) and `SpellTagTypes` (`Name_enUS`) are now **editable**. The editor appends changed UTF-8 strings to the original string block and updates only their known offset fields, keeping all other offsets valid. Unchanged files save byte-identically and saving twice does not duplicate new strings. The original string block is kept byte-for-byte when saving, rather than being reconstructed from guessed offsets.
 
 ### Safety constraints
 
@@ -40,4 +40,4 @@ The project targets **.NET Framework 4.6.1** and builds as a Windows desktop app
 - Verify a known WotLK DBC still opens/saves using its original named definition.
 - Reject unsupported files rather than trying to interpret them as raw WDBC.
 
-No release EXE or Ascension corpus-specific tests are claimed until CI and on-disk round-trips have passed.
+The Windows build and synthetic read/write/edit/reopen tests are verified in CI. The original user-supplied Ascension DBC files are **not** redistributed through CI or included in the public repository.

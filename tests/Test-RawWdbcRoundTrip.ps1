@@ -124,14 +124,46 @@ try {
         $w.Write($msgBlock)
     } finally { $w.Dispose() }
     $msg = $reader.Read($message)
-    Assert ($msg.Data.Rows[0]['IconToken_Preview'] -eq 'icon') 'Icon text not decoded'
-    Assert ($msg.Data.Rows[0]['Title_enUS_Preview'] -eq 'Unlocked') 'Title text not decoded'
-    Assert ($msg.Data.Rows[0]['Text_enUS_Preview'] -eq 'Welcome to Manastorm') 'Message text not decoded'
-    Assert ($msg.Data.Columns['Text_enUS_Preview'].ReadOnly) 'Preview should be read-only'
+    Assert ($msg.Data.Rows[0]['IconToken'] -eq 'icon') 'Icon text not decoded'
+    Assert ($msg.Data.Rows[0]['Title_enUS'] -eq 'Unlocked') 'Title text not decoded'
+    Assert ($msg.Data.Rows[0]['Text_enUS'] -eq 'Welcome to Manastorm') 'Message text not decoded'
+    Assert (-not $msg.Data.Columns['Text_enUS'].ReadOnly) 'Text must be editable'
+    Assert ($msg.Data.Columns['IconToken'].Ordinal -eq 6) 'Icon text is not next to its offset'
+    Assert ([string]::IsNullOrEmpty($reader.ErrorMessage)) 'Verified message handler still emits raw warning'
     $messageSaved = Join-Path $dir 'message-saved.dbc'
     $reader.Write($msg, $messageSaved)
-    Assert (SameBytes $message $messageSaved) 'String preview changed binary'
-    Write-Host 'PASS: verified string previews and byte-preserving round-trip'
+    Assert (SameBytes $message $messageSaved) 'Unedited message changed binary'
+    Write-Host 'PASS: verified editable strings and byte-preserving unedited save'
+
+    $msg.Data.Rows[0]['Title_enUS'] = 'New: Café unlocked!'
+    $msg.Data.Rows[0]['Text_enUS'] = 'Edited message with UTF-8 ✓'
+    $updated = Join-Path $dir 'message-edited.dbc'
+    $reader.Write($msg, $updated)
+    $editedMessage = $reader.Read($updated)
+    Assert ($editedMessage.Data.Rows[0]['IconToken'] -eq 'icon') 'Unedited icon changed'
+    Assert ($editedMessage.Data.Rows[0]['Title_enUS'] -eq 'New: Café unlocked!') 'Edited title lost'
+    Assert ($editedMessage.Data.Rows[0]['Text_enUS'] -eq 'Edited message with UTF-8 ✓') 'Edited message lost'
+    Assert ([uint32]$editedMessage.Data.Rows[0]['Field_006'] -eq 0) 'Unrelated raw field changed'
+    $again = Join-Path $dir 'message-again.dbc'
+    $reader.Write($msg, $again)
+    Assert (SameBytes $updated $again) 'Second save appended duplicate strings'
+    Write-Host 'PASS: edit/reopen UTF-8 title and message without changing unrelated fields'
+
+    $tagTypes = Join-Path $dir 'SpellTagTypes.dbc'
+    $tagStrings = [Text.Encoding]::UTF8.GetBytes("Tag Name`0")
+    $tagWriter = New-Writer $tagTypes 1 61 244 $tagStrings
+    try {
+        for ($i = 0; $i -lt 61; $i++) { $tagWriter.Write([uint32]0) }
+        $tagWriter.Write($tagStrings)
+    } finally { $tagWriter.Dispose() }
+    $tagEntry = $reader.Read($tagTypes)
+    Assert ($tagEntry.Data.Rows[0]['Name_enUS'] -eq 'Tag Name') 'Tag type name not decoded'
+    $tagEntry.Data.Rows[0]['Name_enUS'] = 'Renamed Tag'
+    $tagEdited = Join-Path $dir 'tag-updated.dbc'
+    $reader.Write($tagEntry, $tagEdited)
+    $tagReopen = $reader.Read($tagEdited)
+    Assert ($tagReopen.Data.Rows[0]['Name_enUS'] -eq 'Renamed Tag') 'Tag type name edit failed'
+    Write-Host 'PASS: SpellTagTypes editable string and round trip'
 
     # Verify that a valid stock definition remains active, but a mismatched
     # custom table with the SAME file name is switched to raw mode.

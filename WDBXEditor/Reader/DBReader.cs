@@ -120,8 +120,10 @@ namespace WDBXEditor.Reader
                     rawHeader.OriginalStringBlock = dbReader.ReadBytes((int)header.StringBlockSize);
                     dbReader.BaseStream.Position = pos;
                     ReadIntoTable(ref entry, dbReader, new Dictionary<int, string>());
-                    AddVerifiedStringPreviews(entry, rawHeader);
-                    ErrorMessage = "Raw WDBC mode: unsigned 32-bit words with preserved original strings. Verified string previews are read-only.";
+                    AddEditableAscensionStrings(entry, rawHeader);
+                    ErrorMessage = rawHeader.EditableStringColumns.Length == 0
+                        ? "Raw WDBC mode: unknown fields are opaque unsigned integers; string data is preserved."
+                        : null;
                     stream.Dispose();
                     return entry;
                 }
@@ -417,43 +419,61 @@ namespace WDBXEditor.Reader
         private static string DecodeRawString(byte[] block, uint offset)
         {
             if (offset >= block.Length)
-                return "(invalid offset)";
-            int start = (int)offset;
+                throw new InvalidDataException("String offset is outside the DBC string block.");
+            int start = checked((int)offset);
             int end = Array.IndexOf(block, (byte)0, start);
             if (end < 0)
-                return "(unterminated string)";
+                throw new InvalidDataException("DBC string is not null terminated.");
             return Encoding.UTF8.GetString(block, start, end - start);
         }
 
-        // Decoded previews do not affect the saved binary: editing the opaque
-        // offsets cannot accidentally rebuild or invalidate unrelated strings.
-        private static void AddVerifiedStringPreviews(DBEntry entry, WDBC header)
+        // The offsets remain in the original raw columns; the additional text columns
+        // are editable and are placed immediately after their corresponding offsets.
+        // Only schemas verified against real Ascension DBCs enable text editing.
+        private static void AddEditableAscensionStrings(DBEntry entry, WDBC header)
         {
             string name = entry.TableStructure.Name;
-            int[] indexes;
-            string[] titles;
+            int[] indices;
+            string[] names;
+
             if (name.Equals("ManastormMessages", StringComparison.OrdinalIgnoreCase) &&
-                header.RecordSize == 156)
+                header.RecordSize == 156 && header.FieldCount == 39)
             {
-                indexes = new[] { 4, 5, 22 };
-                titles = new[] { "IconToken_Preview", "Title_enUS_Preview", "Text_enUS_Preview" };
+                indices = new[] { 4, 5, 22 };
+                names = new[] { "IconToken", "Title_enUS", "Text_enUS" };
             }
             else if (name.Equals("SpellTagTypes", StringComparison.OrdinalIgnoreCase) &&
-                     header.RecordSize == 244)
+                     header.RecordSize == 244 && header.FieldCount == 61)
             {
-                indexes = new[] { 27 };
-                titles = new[] { "Name_enUS_Preview" };
+                indices = new[] { 27 };
+                names = new[] { "Name_enUS" };
             }
             else
                 return;
 
-            for (int i = 0; i < indexes.Length; i++)
+            header.EditableStringIndices = indices;
+            header.EditableStringColumns = names;
+
+            for (int i = 0; i < names.Length; i++)
             {
-                DataColumn preview = entry.Data.Columns.Add(titles[i], typeof(string));
-                string source = VerifiedRawFieldName(name, indexes[i]);
-                foreach (DataRow row in entry.Data.Rows)
-                    row[preview] = DecodeRawString(header.OriginalStringBlock, row.Field<uint>(source));
-                preview.ReadOnly = true;
+                DataColumn column = entry.Data.Columns.Add(names[i], typeof(string));
+                column.DefaultValue = string.Empty;
+                // Move the editable text next to its raw numeric offset, not to the
+                // end of a 39/61-column grid. The raw writer uses column names.
+                column.SetOrdinal(indices[i] + 2 + i);
+            }
+
+            foreach (DataRow row in entry.Data.Rows)
+            {
+                var baseline = new string[names.Length];
+                for (int i = 0; i < names.Length; i++)
+                {
+                    string offsetField = VerifiedRawFieldName(name, indices[i]);
+                    string value = DecodeRawString(header.OriginalStringBlock, row.Field<uint>(offsetField));
+                    row[names[i]] = value;
+                    baseline[i] = value;
+                }
+                header.OriginalEditableStrings[row] = baseline;
             }
         }
 
@@ -493,24 +513,82 @@ namespace WDBXEditor.Reader
 
         private static void WriteRawWdbc(DBEntry entry, BinaryWriter writer, WDBC header)
         {
-            int words = (int)(header.RecordSize / 4);
-            int expectedColumns = 1 + words + (int)(header.RecordSize % 4);
-            if (entry.Data.Columns.Count < expectedColumns)
+            int words = checked((int)(header.RecordSize / 4));
+            int tails = checked((int)(header.RecordSize % 4));
+            int expectedColumns = 1 + words + tails + header.EditableStringColumns.Length;
+            if (entry.Data.Columns.Count != expectedColumns)
                 throw new InvalidDataException("Raw WDBC column count changed; refusing to write.");
+
+            // Retain all existing string offsets, including ones whose field meanings
+            // have not been recovered. Edited known strings get appended, never moved.
+            byte[] strings;
+            using (var stringStream = new MemoryStream())
+            {
+                stringStream.Write(header.OriginalStringBlock, 0, header.OriginalStringBlock.Length);
+                foreach (DataRow row in entry.Data.Rows)
+                {
+                    string[] original;
+                    if (!header.OriginalEditableStrings.TryGetValue(row, out original))
+                        original = null;
+
+                    for (int i = 0; i < header.EditableStringColumns.Length; i++)
+                    {
+                        string name = header.EditableStringColumns[i];
+                        string current = row.Field<string>(name) ?? string.Empty;
+                        string offsetField = VerifiedRawFieldName(entry.TableStructure.Name, header.EditableStringIndices[i]);
+                        string previous = original != null && i < original.Length
+                            ? original[i]
+                            : DecodeRawString(header.OriginalStringBlock, row.Field<uint>(offsetField));
+
+                        if (string.Equals(current, previous, StringComparison.Ordinal))
+                            continue;
+                        if (current.IndexOf('\0') >= 0)
+                            throw new InvalidDataException("DBC strings cannot contain null characters.");
+
+                        byte[] encoded = Encoding.UTF8.GetBytes(current);
+                        if (stringStream.Length + encoded.Length + 1 > uint.MaxValue)
+                            throw new InvalidDataException("DBC string block would exceed the maximum size.");
+
+                        uint offset = checked((uint)stringStream.Position);
+                        stringStream.Write(encoded, 0, encoded.Length);
+                        stringStream.WriteByte(0);
+                        row[offsetField] = offset;
+                    }
+                }
+                strings = stringStream.ToArray();
+            }
 
             writer.Write(Encoding.ASCII.GetBytes("WDBC"));
             writer.Write((uint)entry.Data.Rows.Count);
             writer.Write(header.FieldCount);
             writer.Write(header.RecordSize);
-            writer.Write((uint)header.OriginalStringBlock.Length);
+            writer.Write(checked((uint)strings.Length));
             foreach (DataRow row in entry.Data.Rows)
             {
-                for (int column = 1; column <= words; column++)
-                    writer.Write(row.Field<uint>(column));
-                for (int column = words + 1; column < expectedColumns; column++)
-                    writer.Write(row.Field<byte>(column));
+                for (int i = 0; i < words; i++)
+                {
+                    string name = VerifiedRawFieldName(entry.TableStructure.Name, i);
+                    writer.Write(row.Field<uint>(name));
+                }
+                for (int i = 0; i < tails; i++)
+                    writer.Write(row.Field<byte>("TailByte_" + i.ToString("D2")));
             }
-            writer.Write(header.OriginalStringBlock);
+            writer.Write(strings);
+
+            header.OriginalStringBlock = strings;
+            header.StringBlockSize = checked((uint)strings.Length);
+            foreach (DataRow row in entry.Data.Rows)
+            {
+                var baseline = new string[header.EditableStringColumns.Length];
+                for (int i = 0; i < baseline.Length; i++)
+                {
+                    string offsetName = VerifiedRawFieldName(entry.TableStructure.Name, header.EditableStringIndices[i]);
+                    string current = DecodeRawString(strings, row.Field<uint>(offsetName));
+                    row[header.EditableStringColumns[i]] = current;
+                    baseline[i] = current;
+                }
+                header.OriginalEditableStrings[row] = baseline;
+            }
         }
 
         #region Write Methods
