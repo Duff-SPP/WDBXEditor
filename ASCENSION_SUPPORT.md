@@ -8,13 +8,13 @@ This branch adds an **opt-in-by-missing-definition raw WDBC fallback** to WDBXEd
 2. Select **WotLK 3.3.5 (12340)**.
 3. If there is no existing named definition, compatible `WDBC` files open using `_Row`, `Field_000`, `Field_001` etc., and up to three `TailByte_*` columns.
 
-The virtual `_Row` ID is not stored on disk; repeated first-field values are allowed. The raw columns are **opaque integers/bytes** and do not imply signed IDs, floats, string offsets, arrays, or known field semantics. Text is not decoded. The original string block is kept byte-for-byte when saving, rather than being reconstructed from guessed offsets.
+The virtual `_Row` ID is not stored on disk; repeated first-field values are allowed. The raw columns are **opaque integers/bytes** and do not imply signed IDs, floats, string offsets, arrays, or known field semantics. Verified string columns in `ManastormMessages` and `SpellTagTypes` have **read-only decoded previews**. Their original numeric offsets remain editable, but string editing itself is not implemented yet. The original string block is kept byte-for-byte when saving, rather than being reconstructed from guessed offsets.
 
 ### Safety constraints
 
-Raw mode requires a standard `WDBC` signature, a nonzero record size, a file size matching `20 + recordCount*recordSize + stringBlockSize`, and a record width <= 65,536 bytes. Invalid files are rejected. Header `FieldCount` is preserved, but **not assumed** to equal `RecordSize / 4`, because custom tables may violate that assumption. An existing XML definition takes precedence and uses upstream behavior.
+Raw mode requires a standard `WDBC` signature, a nonzero record size, a file size matching `20 + recordCount*recordSize + stringBlockSize`, and a record width <= 65,536 bytes. Invalid files are rejected. Header `FieldCount` is preserved, but **not assumed** to equal `RecordSize / 4`, because custom tables may violate that assumption. An existing XML definition takes precedence only when its expanded field width agrees with the actual record size; otherwise raw fallback prevents mismatched-schema corruption. Empty WDBC tables use raw fallback so they can be viewed and saved without fabricating records.
 
-**This is not a verified schema pack**. Listfiles enumerate filenames but do not supply layouts. For the full Ascension-specific editor, we still need original extracted DBC binary samples to define field names/types/offsets and to test save-and-reopen against those files. Do not edit live game assets without backups.
+**This is not a verified schema pack**. Listfiles enumerate filenames but do not supply layouts. For the full Ascension-specific editor, original extracted DBC samples are now available for Patch-M (288 tables) and Patch-S (48 tables). The first verified field labels are provided for the Manastorm and SpellTags family; the remainder are intentionally untyped unless independently verified. Do not edit live game assets without backups.
 
 ### Build
 

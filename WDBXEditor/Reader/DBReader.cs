@@ -102,12 +102,13 @@ namespace WDBXEditor.Reader
 
 				if (header.CheckRecordSize && header.RecordSize == 0)
 					throw new Exception("File contains no records.");
-				if (header.CheckRecordCount && header.RecordCount == 0)
+				if (header.CheckRecordCount && header.RecordCount == 0 && !(header is WDBC))
 					throw new Exception("File contains no records.");
 
 				DBEntry entry = new DBEntry(header, dbFile);
-                if (header is WDBC raw && entry.TableStructure == null &&
-                    Database.BuildNumber == (int)ExpansionFinalBuild.WotLK)
+                if (header is WDBC raw && Database.BuildNumber == (int)ExpansionFinalBuild.WotLK &&
+                    (raw.RecordCount == 0 || entry.TableStructure == null ||
+                     !MatchesWdbcDefinition(entry, raw.RecordSize)))
                     PrepareRawWdbc(entry, raw, dbFile, dbReader.BaseStream.Length);
 				if (header.CheckTableStructure && entry.TableStructure == null)
 					throw new Exception("Definition missing.");
@@ -119,7 +120,8 @@ namespace WDBXEditor.Reader
                     rawHeader.OriginalStringBlock = dbReader.ReadBytes((int)header.StringBlockSize);
                     dbReader.BaseStream.Position = pos;
                     ReadIntoTable(ref entry, dbReader, new Dictionary<int, string>());
-                    ErrorMessage = "Raw WDBC layout: values are opaque 32-bit words; strings and floats are not decoded.";
+                    AddVerifiedStringPreviews(entry, rawHeader);
+                    ErrorMessage = "Raw WDBC mode: unsigned 32-bit words with preserved original strings. Verified string previews are read-only.";
                     stream.Dispose();
                     return entry;
                 }
@@ -322,6 +324,139 @@ namespace WDBXEditor.Reader
 		}
 		#endregion
 
+        // Existing retail definitions can be structurally incompatible with custom tables
+        // that reuse a retail filename. Refuse to parse them under a mismatched layout.
+        private static bool MatchesWdbcDefinition(DBEntry entry, uint recordSize)
+        {
+            if (entry.Data == null)
+                return false;
+
+            long size = 0;
+            foreach (DataColumn column in entry.Data.Columns)
+            {
+                if (column.ExtendedProperties.ContainsKey(AUTO_GENERATED))
+                    continue;
+
+                switch (Type.GetTypeCode(column.DataType))
+                {
+                    case TypeCode.Boolean:
+                    case TypeCode.Byte:
+                    case TypeCode.SByte:
+                        size++;
+                        break;
+                    case TypeCode.Int16:
+                    case TypeCode.UInt16:
+                        size += 2;
+                        break;
+                    case TypeCode.Int64:
+                    case TypeCode.UInt64:
+                        size += 8;
+                        break;
+                    case TypeCode.String:
+                    case TypeCode.Int32:
+                    case TypeCode.UInt32:
+                    case TypeCode.Single:
+                        size += 4;
+                        break;
+                    default:
+                        return false;
+                }
+            }
+            return size == recordSize;
+        }
+
+        // Only field identities independently verified against the supplied Patch-M/S
+        // data and the public Ascension extraction are labeled. All others stay raw.
+        private static string VerifiedRawFieldName(string name, int index)
+        {
+            if (name.Equals("Manastorm", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (index)
+                {
+                    case 0: return "Id";
+                    case 1: return "MapId";
+                    case 2: return "Difficulty";
+                    case 3: return "DungeonEncounterId";
+                }
+            }
+            else if (name.Equals("SpellTags", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (index)
+                {
+                    case 0: return "Id";
+                    case 1: return "SpellId";
+                    case 2: return "TagTypeId";
+                }
+            }
+            else if (name.Equals("ManastormMessages", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (index)
+                {
+                    case 0: return "Id";
+                    case 4: return "IconToken_Offset";
+                    case 5: return "Title_enUS_Offset";
+                    case 22: return "Text_enUS_Offset";
+                }
+            }
+            else if (name.Equals("SpellTagTypes", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (index)
+                {
+                    case 0: return "Id";
+                    case 27: return "Name_enUS_Offset";
+                }
+            }
+            else if (index == 0 &&
+                (name.Equals("ManastormModifiers", StringComparison.OrdinalIgnoreCase) ||
+                 name.Equals("ManastormPlayerGroupModifiers", StringComparison.OrdinalIgnoreCase)))
+                return "Id";
+
+            return "Field_" + index.ToString("D3");
+        }
+
+        private static string DecodeRawString(byte[] block, uint offset)
+        {
+            if (offset >= block.Length)
+                return "(invalid offset)";
+            int start = (int)offset;
+            int end = Array.IndexOf(block, (byte)0, start);
+            if (end < 0)
+                return "(unterminated string)";
+            return Encoding.UTF8.GetString(block, start, end - start);
+        }
+
+        // Decoded previews do not affect the saved binary: editing the opaque
+        // offsets cannot accidentally rebuild or invalidate unrelated strings.
+        private static void AddVerifiedStringPreviews(DBEntry entry, WDBC header)
+        {
+            string name = entry.TableStructure.Name;
+            int[] indexes;
+            string[] titles;
+            if (name.Equals("ManastormMessages", StringComparison.OrdinalIgnoreCase) &&
+                header.RecordSize == 156)
+            {
+                indexes = new[] { 4, 5, 22 };
+                titles = new[] { "IconToken_Preview", "Title_enUS_Preview", "Text_enUS_Preview" };
+            }
+            else if (name.Equals("SpellTagTypes", StringComparison.OrdinalIgnoreCase) &&
+                     header.RecordSize == 244)
+            {
+                indexes = new[] { 27 };
+                titles = new[] { "Name_enUS_Preview" };
+            }
+            else
+                return;
+
+            for (int i = 0; i < indexes.Length; i++)
+            {
+                DataColumn preview = entry.Data.Columns.Add(titles[i], typeof(string));
+                string source = VerifiedRawFieldName(name, indexes[i]);
+                foreach (DataRow row in entry.Data.Rows)
+                    row[preview] = DecodeRawString(header.OriginalStringBlock, row.Field<uint>(source));
+                preview.ReadOnly = true;
+            }
+        }
+
         // Raw WDBC is a fallback for otherwise unknown Ascension tables, not a schema guess.
         // Always preserve the original string block bytes to keep unknown offsets valid.
         private static void PrepareRawWdbc(DBEntry entry, WDBC header, string filename, long fileLength)
@@ -338,8 +473,9 @@ namespace WDBXEditor.Reader
             {
                 new Field { Name = "_Row", Type = "int", IsIndex = true, AutoGenerate = true }
             };
+            string tableName = Path.GetFileNameWithoutExtension(filename);
             for (int i = 0; i < words; i++)
-                fields.Add(new Field { Name = "Field_" + i.ToString("D3"), Type = "uint" });
+                fields.Add(new Field { Name = VerifiedRawFieldName(tableName, i), Type = "uint" });
             for (int i = 0; i < trailingBytes; i++)
                 fields.Add(new Field { Name = "TailByte_" + i.ToString("D2"), Type = "byte" });
 
@@ -359,7 +495,7 @@ namespace WDBXEditor.Reader
         {
             int words = (int)(header.RecordSize / 4);
             int expectedColumns = 1 + words + (int)(header.RecordSize % 4);
-            if (entry.Data.Columns.Count != expectedColumns)
+            if (entry.Data.Columns.Count < expectedColumns)
                 throw new InvalidDataException("Raw WDBC column count changed; refusing to write.");
 
             writer.Write(Encoding.ASCII.GetBytes("WDBC"));

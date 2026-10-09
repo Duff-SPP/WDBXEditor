@@ -86,6 +86,53 @@ try {
     Assert (SameBytes $short $oddSaved) 'Non-4-byte record changed in round trip'
     Write-Host 'PASS: non-4-byte record size and tail-byte round trip'
 
+    $empty = Join-Path $dir 'EmptyCustom.dbc'
+    $w = New-Writer $empty 0 4 16 ([byte[]]@())
+    $w.Dispose()
+    $emptyEntry = $reader.Read($empty)
+    Assert ($emptyEntry.Data.Rows.Count -eq 0) 'Empty WDBC rejected'
+    $emptySaved = Join-Path $dir 'empty-saved.dbc'
+    $reader.Write($emptyEntry, $emptySaved)
+    Assert (SameBytes $empty $emptySaved) 'Empty WDBC did not round trip'
+    Write-Host 'PASS: zero-row WDBC open/save'
+
+    $mapped = Join-Path $dir 'Manastorm.dbc'
+    $w = New-Writer $mapped 1 9 36 ([byte[]]@())
+    try {
+        $w.Write([uint32]1); $w.Write([uint32]389); $w.Write([uint32]2); $w.Write([uint32]431)
+        for ($i = 4; $i -lt 9; $i++) { $w.Write([uint32]0) }
+    } finally { $w.Dispose() }
+    $named = $reader.Read($mapped)
+    Assert ([uint32]$named.Data.Rows[0]['MapId'] -eq 389) 'Verified Manastorm MapId missing'
+    Assert ([uint32]$named.Data.Rows[0]['DungeonEncounterId'] -eq 431) 'Verified encounter field missing'
+    $namedSaved = Join-Path $dir 'named-saved.dbc'
+    $reader.Write($named, $namedSaved)
+    Assert (SameBytes $mapped $namedSaved) 'Named raw fields changed data'
+    Write-Host 'PASS: verified Manastorm field labels and round-trip'
+
+    $message = Join-Path $dir 'ManastormMessages.dbc'
+    $msgBlock = [Text.Encoding]::UTF8.GetBytes("icon`0Unlocked`0Welcome to Manastorm`0")
+    $w = New-Writer $message 1 39 156 $msgBlock
+    try {
+        for ($i = 0; $i -lt 39; $i++) {
+            $value = [uint32]0
+            if ($i -eq 0) { $value = 1 }
+            if ($i -eq 5) { $value = 5 }
+            if ($i -eq 22) { $value = 14 }
+            $w.Write($value)
+        }
+        $w.Write($msgBlock)
+    } finally { $w.Dispose() }
+    $msg = $reader.Read($message)
+    Assert ($msg.Data.Rows[0]['IconToken_Preview'] -eq 'icon') 'Icon text not decoded'
+    Assert ($msg.Data.Rows[0]['Title_enUS_Preview'] -eq 'Unlocked') 'Title text not decoded'
+    Assert ($msg.Data.Rows[0]['Text_enUS_Preview'] -eq 'Welcome to Manastorm') 'Message text not decoded'
+    Assert ($msg.Data.Columns['Text_enUS_Preview'].ReadOnly) 'Preview should be read-only'
+    $messageSaved = Join-Path $dir 'message-saved.dbc'
+    $reader.Write($msg, $messageSaved)
+    Assert (SameBytes $message $messageSaved) 'String preview changed binary'
+    Write-Host 'PASS: verified string previews and byte-preserving round-trip'
+
     $bad = Join-Path $dir 'InvalidLength.dbc'
     [IO.File]::WriteAllBytes($bad, [byte[]]([IO.File]::ReadAllBytes($source) + [byte]255))
     $rejected = $false
