@@ -20,9 +20,17 @@ Raw mode requires a standard `WDBC` signature, a nonzero record size, a file siz
 
 The project targets **.NET Framework 4.6.1** and builds as a Windows desktop application. A dedicated workflow is in `.github/workflows/ascension-windows.yml` (branch push or manual dispatch); it produces a downloadable Windows artifact. On Windows with Visual Studio/MSBuild, build `WDBXEditor.sln` in Release after NuGet restore.
 
+### Uploaded sample corpus (2026-10-09)
+
+- Patch-M contains **288** unique extracted WDBC tables; Patch-S contains **48**, with **no overlapping filenames**.
+- All **336** files have a valid WDBC signature and internally consistent header/record/string-block lengths.
+- **10** tables report a header FieldCount different from their actual record bytes / 4; **3** have non-4-byte-aligned records (CharBaseInfo, PowerDisplay, SpellChainEffects).
+- **8** files are valid zero-row tables and must be safely opened/saved without inventing data.
+- Sample data is **not** checked into Git: it came from user-supplied archives and should remain local. Only derived structural facts and verified field labels are committed.
+
 ### CI round-trip tests
 
-`tests/Test-RawWdbcRoundTrip.ps1` runs in Windows GitHub Actions after compilation. It tests a synthetic WDBC with duplicate first-column values and an intentionally mismatched field count; unchanged save byte equality; numeric edit/reopen; non-four-byte record sizes; and malformed-length rejection. This is **not** a substitute for real Ascension DBC sample verification.
+`tests/Test-RawWdbcRoundTrip.ps1` runs in Windows GitHub Actions after compilation. It tests a synthetic WDBC with duplicate first-column values and an intentionally mismatched field count; unchanged save byte equality; numeric edit/reopen; non-four-byte record sizes; and malformed-length rejection. It also checks that a compatible existing retail schema remains active while a custom file reusing that filename with a different record size falls back to raw mode. This is **not** a substitute for real Ascension DBC sample verification.
 
 ### Manual round-trip verification
 

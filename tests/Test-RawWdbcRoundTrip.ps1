@@ -133,6 +133,38 @@ try {
     Assert (SameBytes $message $messageSaved) 'String preview changed binary'
     Write-Host 'PASS: verified string previews and byte-preserving round-trip'
 
+    # Verify that a valid stock definition remains active, but a mismatched
+    # custom table with the SAME file name is switched to raw mode.
+    $defXml = '<Definition><Table Name="KnownSchema" Build="12340"><Field Name="Id" Type="int" IsIndex="true" /><Field Name="Value" Type="uint" /></Table></Definition>'
+    $serializer = [Xml.Serialization.XmlSerializer]::new($assembly.GetType('WDBXEditor.Storage.Definition', $true))
+    $definition = $serializer.Deserialize([IO.StringReader]::new($defXml))
+    $definitionTable = @($definition.Tables)[0]
+    $definitionTable.Load()
+    $catalog = $databaseType.GetProperty('Definitions', $flags).GetValue($null)
+    [void]$catalog.Tables.Add($definitionTable)
+
+    $known = Join-Path $dir 'KnownSchema.dbc'
+    $w = New-Writer $known 1 2 8 ([byte[]]@())
+    try { $w.Write([int32]1); $w.Write([uint32]300) }
+    finally { $w.Dispose() }
+    $knownEntry = $reader.Read($known)
+    Assert (-not $knownEntry.Header.IsRawLayout) 'Matching retail definition lost'
+    Assert ([uint32]$knownEntry.Data.Rows[0]['Value'] -eq 300) 'Matching retail schema failed'
+
+    $mismatchedDir = Join-Path $dir 'mismatch'
+    [void](New-Item -Path $mismatchedDir -ItemType Directory)
+    $mismatched = Join-Path $mismatchedDir 'KnownSchema.dbc'
+    $w = New-Writer $mismatched 1 3 12 ([byte[]]@())
+    try { $w.Write([uint32]1); $w.Write([uint32]300); $w.Write([uint32]400) }
+    finally { $w.Dispose() }
+    $mismatchEntry = $reader.Read($mismatched)
+    Assert $mismatchEntry.Header.IsRawLayout 'Mismatched retail definition was incorrectly trusted'
+    Assert ([uint32]$mismatchEntry.Data.Rows[0]['Field_002'] -eq 400) 'Mismatched final raw field missing'
+    $mismatchedSaved = Join-Path $dir 'mismatch-saved.dbc'
+    $reader.Write($mismatchEntry, $mismatchedSaved)
+    Assert (SameBytes $mismatched $mismatchedSaved) 'Mismatched schema round trip failed'
+    Write-Host 'PASS: stock schema retained and mismatched custom schema rejected'
+
     $bad = Join-Path $dir 'InvalidLength.dbc'
     [IO.File]::WriteAllBytes($bad, [byte[]]([IO.File]::ReadAllBytes($source) + [byte]255))
     $rejected = $false
