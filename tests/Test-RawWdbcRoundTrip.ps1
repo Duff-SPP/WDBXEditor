@@ -135,16 +135,18 @@ try {
     Assert (SameBytes $message $messageSaved) 'Unedited message changed binary'
     Write-Host 'PASS: verified editable strings and byte-preserving unedited save'
 
-    $msg.Data.Rows[0]['Title_enUS'] = 'New: Café unlocked!'
-    $msg.Data.Rows[0]['Text_enUS'] = 'Edited message with UTF-8 ✓'
+    $newTitle = 'New: Caf' + [char]0x00E9 + ' unlocked!'
+    $newText = 'Edited message with UTF-8 ' + [char]0x2713
+    $msg.Data.Rows[0]['Title_enUS'] = $newTitle
+    $msg.Data.Rows[0]['Text_enUS'] = $newText
     $editDir = Join-Path $dir 'edited-message'
     [void](New-Item -Path $editDir -ItemType Directory)
     $updated = Join-Path $editDir 'ManastormMessages.dbc'
     $reader.Write($msg, $updated)
     $editedMessage = $reader.Read($updated)
     Assert ($editedMessage.Data.Rows[0]['IconToken'] -eq 'icon') 'Unedited icon changed'
-    Assert ($editedMessage.Data.Rows[0]['Title_enUS'] -eq 'New: Café unlocked!') 'Edited title lost'
-    Assert ($editedMessage.Data.Rows[0]['Text_enUS'] -eq 'Edited message with UTF-8 ✓') 'Edited message lost'
+    Assert ($editedMessage.Data.Rows[0]['Title_enUS'] -eq $newTitle) 'Edited title lost'
+    Assert ($editedMessage.Data.Rows[0]['Text_enUS'] -eq $newText) 'Edited message lost'
     Assert ([uint32]$editedMessage.Data.Rows[0]['Field_006'] -eq 0) 'Unrelated raw field changed'
     $again = Join-Path $dir 'message-again.dbc'
     $reader.Write($msg, $again)
