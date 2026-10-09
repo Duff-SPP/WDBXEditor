@@ -41,3 +41,7 @@ The project targets **.NET Framework 4.6.1** and builds as a Windows desktop app
 - Reject unsupported files rather than trying to interpret them as raw WDBC.
 
 The Windows build and synthetic read/write/edit/reopen tests are verified in CI. The original user-supplied Ascension DBC files are **not** redistributed through CI or included in the public repository.
+
+### Important: preserve the filename
+
+WDBXEditor identifies DBC definitions by **basename**. When saving or testing a known Ascension table, retain `ManastormMessages.dbc` or `SpellTagTypes.dbc` as the filename. Save in a different **directory** if you need a copy. Renaming it to an unrelated filename intentionally reverts to generic raw fallback.

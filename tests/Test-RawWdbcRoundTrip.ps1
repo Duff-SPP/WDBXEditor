@@ -137,7 +137,9 @@ try {
 
     $msg.Data.Rows[0]['Title_enUS'] = 'New: Café unlocked!'
     $msg.Data.Rows[0]['Text_enUS'] = 'Edited message with UTF-8 ✓'
-    $updated = Join-Path $dir 'message-edited.dbc'
+    $editDir = Join-Path $dir 'edited-message'
+    [void](New-Item -Path $editDir -ItemType Directory)
+    $updated = Join-Path $editDir 'ManastormMessages.dbc'
     $reader.Write($msg, $updated)
     $editedMessage = $reader.Read($updated)
     Assert ($editedMessage.Data.Rows[0]['IconToken'] -eq 'icon') 'Unedited icon changed'
@@ -159,7 +161,9 @@ try {
     $tagEntry = $reader.Read($tagTypes)
     Assert ($tagEntry.Data.Rows[0]['Name_enUS'] -eq 'Tag Name') 'Tag type name not decoded'
     $tagEntry.Data.Rows[0]['Name_enUS'] = 'Renamed Tag'
-    $tagEdited = Join-Path $dir 'tag-updated.dbc'
+    $tagDir = Join-Path $dir 'edited-tags'
+    [void](New-Item -Path $tagDir -ItemType Directory)
+    $tagEdited = Join-Path $tagDir 'SpellTagTypes.dbc'
     $reader.Write($tagEntry, $tagEdited)
     $tagReopen = $reader.Read($tagEdited)
     Assert ($tagReopen.Data.Rows[0]['Name_enUS'] -eq 'Renamed Tag') 'Tag type name edit failed'

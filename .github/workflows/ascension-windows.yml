@@ -30,7 +30,7 @@ jobs:
       - name: Build Release
         run: msbuild WDBXEditor.sln /t:Rebuild /p:Configuration=Release "/p:Platform=Any CPU" /m /v:minimal
       - name: Round-trip raw WDBC smoke test
-        shell: powershell
+        shell: pwsh
         run: .\\tests\\Test-RawWdbcRoundTrip.ps1
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
