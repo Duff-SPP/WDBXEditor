@@ -42,6 +42,7 @@ try {
     } finally { $w.Dispose() }
 
     $entry = $reader.Read($source)
+    Assert ([string]::IsNullOrEmpty($reader.ErrorMessage)) 'Successful raw DBC load must not generate a warning'
     Assert $entry.Header.IsRawLayout 'Unknown WDBC did not select raw mode'
     Assert ($entry.Data.Rows.Count -eq 2) 'Wrong record count'
     Assert ($entry.Data.Columns.Count -eq 4) 'Wrong raw column count'
@@ -202,6 +203,59 @@ try {
     $reader.Write($mismatchEntry, $mismatchedSaved)
     Assert (SameBytes $mismatched $mismatchedSaved) 'Mismatched schema round trip failed'
     Write-Host 'PASS: stock schema retained and mismatched custom schema rejected'
+
+    # Synthetic MysticEnchant matching 31 on-disk words and real Patch-M column offsets.
+    # IMPORTANT: string at offset zero is NONEMPTY (RE_QUALITY_RARE).
+    $mysticStrings = [Text.Encoding]::UTF8.GetBytes("RE_QUALITY_RARE`0RE_QUALITY_UNCOMMON`0NONE`0FROST`0")
+    $mysticPath = Join-Path $dir 'MysticEnchant.dbc'
+    $mw = New-Writer $mysticPath 2 31 124 $mysticStrings
+    try {
+        for ($r = 0; $r -lt 2; $r++) {
+            for ($i = 0; $i -lt 31; $i++) {
+                $v = [uint32]0
+                switch ($i) {
+                    0 { $v = [uint32]($r + 1) }
+                    1 { $v = [uint32](95923 + $r) }
+                    2 { $v = [BitConverter]::ToUInt32([BitConverter]::GetBytes([single]95), 0) }
+                    3 { $v = [uint32]0 }
+                    4 { $v = [uint32]16 }
+                    15 { $v = [uint32]36 }
+                    16 { $v = [uint32]36 }
+                    17 { $v = [uint32]36 }
+                    18 { $v = [uint32]36 }
+                    20 { $v = [uint32]12345 }
+                }
+                $mw.Write($v)
+            }
+        }
+        $mw.Write($mysticStrings)
+    } finally { $mw.Dispose() }
+    $m = $reader.Read($mysticPath)
+    Assert ([string]::IsNullOrEmpty($reader.ErrorMessage)) 'MysticEnchant emitted raw warning'
+    Assert ($m.Data.Rows[0]['QualityToken_1'] -eq 'RE_QUALITY_RARE') 'String offset zero decoded incorrectly'
+    Assert ($m.Data.Rows[0]['QualityToken_2'] -eq 'RE_QUALITY_UNCOMMON') 'Quality 2 decoding failed'
+    Assert ($m.Data.Rows[0]['SpecializationToken_1'] -eq 'NONE') 'Specialization decoding failed'
+    Assert ([float]$m.Data.Rows[0]['Field_002_Float'] -eq 95) 'Float field not decoded'
+    $mUnedited = Join-Path $dir 'MysticEnchant-unchanged.dbc'
+    $reader.Write($m, $mUnedited)
+    Assert (SameBytes $mysticPath $mUnedited) 'Unedited MysticEnchant roundtrip changed bytes'
+    $m.Data.Rows[0]['QualityToken_1'] = 'RE_QUALITY_EPIC'
+    $m.Data.Rows[0]['SpecializationToken_1'] = 'FROST'
+    $m.Data.Rows[0]['Field_002_Float'] = [single]112
+    $mDir = Join-Path $dir 'Mystic-Edited'
+    [void](New-Item -ItemType Directory -Path $mDir)
+    $mPath2 = Join-Path $mDir 'MysticEnchant.dbc'
+    $reader.Write($m, $mPath2)
+    $m2 = $reader.Read($mPath2)
+    Assert ($m2.Data.Rows[0]['QualityToken_1'] -eq 'RE_QUALITY_EPIC') 'Quality token edit lost'
+    Assert ($m2.Data.Rows[0]['SpecializationToken_1'] -eq 'FROST') 'Specialization edit lost'
+    Assert ([float]$m2.Data.Rows[0]['Field_002_Float'] -eq 112) 'Float edit lost'
+    Assert ([uint32]$m2.Data.Rows[0]['Field_020'] -eq 12345) 'Unrelated value changed'
+    Assert ($m2.Data.Rows[1]['QualityToken_1'] -eq 'RE_QUALITY_RARE') 'Second row corrupted'
+    $mAgain = Join-Path $dir 'mystic-again.dbc'
+    $reader.Write($m, $mAgain)
+    Assert (SameBytes $mPath2 $mAgain) 'Second save should not change MysticEnchant'
+    Write-Host 'PASS: MysticEnchant six editable strings, float, no warning, unchanged/edited round trips'
 
     $bad = Join-Path $dir 'InvalidLength.dbc'
     [IO.File]::WriteAllBytes($bad, [byte[]]([IO.File]::ReadAllBytes($source) + [byte]255))

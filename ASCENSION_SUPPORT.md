@@ -45,3 +45,9 @@ The Windows build and synthetic read/write/edit/reopen tests are verified in CI.
 ### Important: preserve the filename
 
 WDBXEditor identifies DBC definitions by **basename**. When saving or testing a known Ascension table, retain `ManastormMessages.dbc` or `SpellTagTypes.dbc` as the filename. Save in a different **directory** if you need a copy. Renaming it to an unrelated filename intentionally reverts to generic raw fallback.
+
+### MysticEnchant.dbc (Patch-M) and raw-mode notification
+
+A valid raw-mode load is normal, **not a warning**. The fallback no longer reports it as a warning; invalid files still throw real errors.
+
+Patch-M's MysticEnchant has 7,841 records of 31 four-byte words each, with a 359-byte string block. All six string columns (3, 4, 15, 16, 17, 18) were checked against the actual file and are now editable as quality/specialization tokens. Field 2 is IEEE-754 float data, editable through `Field_002_Float` while the original bit pattern remains visible in `Field_002`. Unknown fields remain untouched raw numbers. String offset zero can contain nonempty text, as in this table. The original binary is **not** redistributed via GitHub; synthetic records are tested on Windows CI.

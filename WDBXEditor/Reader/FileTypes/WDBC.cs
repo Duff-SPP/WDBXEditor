@@ -18,6 +18,9 @@ namespace WDBXEditor.Reader.FileTypes
         public int[] EditableStringIndices { get; set; } = new int[0];
         public string[] EditableStringColumns { get; set; } = new string[0];
         public Dictionary<DataRow, string[]> OriginalEditableStrings { get; } = new Dictionary<DataRow, string[]>();
+        public int[] EditableFloatIndices { get; set; } = new int[0];
+        public string[] EditableFloatColumns { get; set; } = new string[0];
+        public Dictionary<DataRow, float[]> OriginalEditableFloats { get; } = new Dictionary<DataRow, float[]>();
         public override void ReadHeader(ref BinaryReader dbReader, string signature)
         {
             base.ReadHeader(ref dbReader, signature);

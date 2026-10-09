@@ -89,6 +89,7 @@ namespace WDBXEditor.Reader
 		public DBEntry Read(MemoryStream stream, string dbFile)
 		{
 			FileName = dbFile;
+            ErrorMessage = null;
 			stream.Position = 0;
 
 			using (var dbReader = new BinaryReader(stream, Encoding.UTF8))
@@ -121,9 +122,8 @@ namespace WDBXEditor.Reader
                     dbReader.BaseStream.Position = pos;
                     ReadIntoTable(ref entry, dbReader, new Dictionary<int, string>());
                     AddEditableAscensionStrings(entry, rawHeader);
-                    ErrorMessage = rawHeader.EditableStringColumns.Length == 0
-                        ? "Raw WDBC mode: unknown fields are opaque unsigned integers; string data is preserved."
-                        : null;
+                    AddEditableAscensionFloats(entry, rawHeader);
+                    // A compatible raw-table load is normal, not a warning.
                     stream.Dispose();
                     return entry;
                 }
@@ -408,6 +408,19 @@ namespace WDBXEditor.Reader
                     case 27: return "Name_enUS_Offset";
                 }
             }
+            else if (name.Equals("MysticEnchant", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (index)
+                {
+                    case 0: return "Id";
+                    case 3: return "QualityToken_1_Offset";
+                    case 4: return "QualityToken_2_Offset";
+                    case 15: return "SpecializationToken_1_Offset";
+                    case 16: return "SpecializationToken_2_Offset";
+                    case 17: return "SpecializationToken_3_Offset";
+                    case 18: return "SpecializationToken_4_Offset";
+                }
+            }
             else if (index == 0 &&
                 (name.Equals("ManastormModifiers", StringComparison.OrdinalIgnoreCase) ||
                  name.Equals("ManastormPlayerGroupModifiers", StringComparison.OrdinalIgnoreCase)))
@@ -448,6 +461,15 @@ namespace WDBXEditor.Reader
                 indices = new[] { 27 };
                 names = new[] { "Name_enUS" };
             }
+            else if (name.Equals("MysticEnchant", StringComparison.OrdinalIgnoreCase) &&
+                     header.RecordSize == 124 && header.FieldCount == 31)
+            {
+                // All 7,841 provided records have valid string offsets in these six fields.
+                indices = new[] { 3, 4, 15, 16, 17, 18 };
+                names = new[] { "QualityToken_1", "QualityToken_2",
+                                "SpecializationToken_1", "SpecializationToken_2",
+                                "SpecializationToken_3", "SpecializationToken_4" };
+            }
             else
                 return;
 
@@ -474,6 +496,34 @@ namespace WDBXEditor.Reader
                     baseline[i] = value;
                 }
                 header.OriginalEditableStrings[row] = baseline;
+            }
+        }
+
+        // Only a verified IEEE-754 float bit-field gets an editable float view.
+        private static void AddEditableAscensionFloats(DBEntry entry, WDBC header)
+        {
+            if (!entry.TableStructure.Name.Equals("MysticEnchant", StringComparison.OrdinalIgnoreCase) ||
+                header.RecordSize != 124 || header.FieldCount != 31)
+                return;
+
+            header.EditableFloatIndices = new[] { 2 };
+            header.EditableFloatColumns = new[] { "Field_002_Float" };
+            for (int i = 0; i < header.EditableFloatIndices.Length; i++)
+            {
+                var column = entry.Data.Columns.Add(header.EditableFloatColumns[i], typeof(float));
+                column.SetOrdinal(header.EditableFloatIndices[i] + 2 + i);
+            }
+            foreach (DataRow row in entry.Data.Rows)
+            {
+                var baseline = new float[header.EditableFloatIndices.Length];
+                for (int i = 0; i < baseline.Length; i++)
+                {
+                    string name = VerifiedRawFieldName(entry.TableStructure.Name, header.EditableFloatIndices[i]);
+                    float value = BitConverter.ToSingle(BitConverter.GetBytes(row.Field<uint>(name)), 0);
+                    row[header.EditableFloatColumns[i]] = value;
+                    baseline[i] = value;
+                }
+                header.OriginalEditableFloats[row] = baseline;
             }
         }
 
@@ -515,9 +565,28 @@ namespace WDBXEditor.Reader
         {
             int words = checked((int)(header.RecordSize / 4));
             int tails = checked((int)(header.RecordSize % 4));
-            int expectedColumns = 1 + words + tails + header.EditableStringColumns.Length;
+            int expectedColumns = 1 + words + tails + header.EditableStringColumns.Length + header.EditableFloatColumns.Length;
             if (entry.Data.Columns.Count != expectedColumns)
                 throw new InvalidDataException("Raw WDBC column count changed; refusing to write.");
+
+            // Update only modified float values. Unchanged raw IEEE-754 bits are preserved.
+            foreach (DataRow row in entry.Data.Rows)
+            {
+                float[] baseline;
+                if (!header.OriginalEditableFloats.TryGetValue(row, out baseline))
+                    baseline = null;
+                for (int i = 0; i < header.EditableFloatColumns.Length; i++)
+                {
+                    string name = header.EditableFloatColumns[i];
+                    string rawName = VerifiedRawFieldName(entry.TableStructure.Name, header.EditableFloatIndices[i]);
+                    uint currentBits = BitConverter.ToUInt32(BitConverter.GetBytes(row.Field<float>(name)), 0);
+                    uint baselineBits = baseline != null && i < baseline.Length
+                        ? BitConverter.ToUInt32(BitConverter.GetBytes(baseline[i]), 0)
+                        : row.Field<uint>(rawName);
+                    if (currentBits != baselineBits)
+                        row[rawName] = currentBits;
+                }
+            }
 
             // Retain all existing string offsets, including ones whose field meanings
             // have not been recovered. Edited known strings get appended, never moved.
@@ -588,6 +657,15 @@ namespace WDBXEditor.Reader
                     baseline[i] = current;
                 }
                 header.OriginalEditableStrings[row] = baseline;
+                var floatBaseline = new float[header.EditableFloatColumns.Length];
+                for (int i = 0; i < floatBaseline.Length; i++)
+                {
+                    string rawName = VerifiedRawFieldName(entry.TableStructure.Name, header.EditableFloatIndices[i]);
+                    float newValue = BitConverter.ToSingle(BitConverter.GetBytes(row.Field<uint>(rawName)), 0);
+                    row[header.EditableFloatColumns[i]] = newValue;
+                    floatBaseline[i] = newValue;
+                }
+                header.OriginalEditableFloats[row] = floatBaseline;
             }
         }
 
