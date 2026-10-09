@@ -29,6 +29,9 @@ jobs:
         run: nuget restore WDBXEditor.sln -NonInteractive
       - name: Build Release
         run: msbuild WDBXEditor.sln /t:Rebuild /p:Configuration=Release "/p:Platform=Any CPU" /m /v:minimal
+      - name: Round-trip raw WDBC smoke test
+        shell: powershell
+        run: .\\tests\\Test-RawWdbcRoundTrip.ps1
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:

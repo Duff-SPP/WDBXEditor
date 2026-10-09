@@ -20,6 +20,10 @@ Raw mode requires a standard `WDBC` signature, a nonzero record size, a file siz
 
 The project targets **.NET Framework 4.6.1** and builds as a Windows desktop application. A dedicated workflow is in `.github/workflows/ascension-windows.yml` (branch push or manual dispatch); it produces a downloadable Windows artifact. On Windows with Visual Studio/MSBuild, build `WDBXEditor.sln` in Release after NuGet restore.
 
+### CI round-trip tests
+
+`tests/Test-RawWdbcRoundTrip.ps1` runs in Windows GitHub Actions after compilation. It tests a synthetic WDBC with duplicate first-column values and an intentionally mismatched field count; unchanged save byte equality; numeric edit/reopen; non-four-byte record sizes; and malformed-length rejection. This is **not** a substitute for real Ascension DBC sample verification.
+
 ### Manual round-trip verification
 
 - Open a copied unknown WDBC and confirm `_Row` is virtual and the raw values appear.
